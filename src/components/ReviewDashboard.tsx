@@ -147,13 +147,13 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
 
 function QuestionEditor({
   question,
-  pageBase64,
+  page,
   apiKey,
   onChange,
   onDelete,
 }: {
   question: Question;
-  pageBase64: string;
+  page: import("@/lib/pdf").RenderedPage;
   apiKey: string;
   onChange: (q: Question) => void;
   onDelete: () => void;
@@ -164,10 +164,11 @@ function QuestionEditor({
   const handleRegen = async () => {
     setRegenerating(true);
     try {
-      const svg = await regenerateDiagram(apiKey, pageBase64, question.question_text);
-      onChange({ ...question, diagram_svg_code: svg, has_diagram: true });
+      const bbox = await regenerateDiagramBbox(apiKey, page.base64, question.question_text);
+      const img = await cropFromDataUrl(page.dataUrl, bbox, page.width, page.height);
+      onChange({ ...question, diagram_bbox: bbox, diagram_image: img, has_diagram: true });
     } catch (e: any) {
-      alert("Regenerate failed: " + e.message);
+      alert("Re-crop failed: " + e.message);
     } finally {
       setRegenerating(false);
     }
@@ -234,24 +235,31 @@ function QuestionEditor({
         <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
           <div className="flex items-center justify-between">
             <Label className="text-xs uppercase tracking-wide text-muted-foreground">
-              Diagram
+              Diagram (cropped from source)
             </Label>
             <Button size="sm" variant="ghost" onClick={handleRegen} disabled={regenerating}>
               <RefreshCw className={`mr-1 h-3 w-3 ${regenerating ? "animate-spin" : ""}`} />
-              Regenerate
+              Re-crop
             </Button>
           </div>
-          <div
-            className="mx-auto flex max-w-sm justify-center bg-white p-2 rounded [&_svg]:max-h-64"
-            dangerouslySetInnerHTML={{ __html: question.diagram_svg_code }}
-          />
-          {editing && (
-            <Textarea
-              value={question.diagram_svg_code}
-              onChange={(e) => onChange({ ...question, diagram_svg_code: e.target.value })}
-              rows={6}
-              className="font-mono text-xs"
+          {question.diagram_image ? (
+            <div className="mx-auto flex max-w-md justify-center bg-white p-2 rounded">
+              <img src={question.diagram_image} alt="Diagram" className="max-h-72 object-contain" />
+            </div>
+          ) : question.diagram_svg_code ? (
+            <div
+              className="mx-auto flex max-w-sm justify-center bg-white p-2 rounded [&_svg]:max-h-64"
+              dangerouslySetInnerHTML={{ __html: question.diagram_svg_code }}
             />
+          ) : (
+            <p className="text-xs text-muted-foreground text-center py-4">
+              No diagram crop yet — click Re-crop to detect and extract.
+            </p>
+          )}
+          {editing && question.diagram_bbox && (
+            <p className="text-[10px] text-muted-foreground text-center font-mono">
+              bbox: [{question.diagram_bbox.join(", ")}]
+            </p>
           )}
         </div>
       )}
