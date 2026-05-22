@@ -131,7 +131,7 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
               <QuestionEditor
                 key={q.id + i}
                 question={q}
-                pageBase64={current.page.base64}
+                page={current.page}
                 apiKey={apiKey}
                 onChange={(nq) => updateQuestion(i, nq)}
                 onDelete={() => deleteQuestion(i)}
