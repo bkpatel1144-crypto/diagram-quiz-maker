@@ -10,13 +10,37 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Pencil, Check, RefreshCw, Trash2, FileJson, FileCode } from "lucide-react";
 import type { Question } from "@/lib/gemini";
 import { regenerateDiagramBbox } from "@/lib/gemini";
-import { cropFromDataUrl } from "@/lib/pdf";
+import { cropFromDataUrl, removeBackground } from "@/lib/pdf-utils";
 
 interface Props {
   results: PageResult[];
   apiKey: string;
   onUpdate: (results: PageResult[]) => void;
   onReset: () => void;
+}
+
+/**
+ * Resolve the correct-answer index (0-based) from whatever format the AI returned.
+ * Handles: "a"/"b"/"c"/"d", "(a)"/"(b)", "A"/"B", full option text, or index string "0"/"1".
+ */
+function resolveCorrectIndex(correctAnswer: string, options: string[]): number {
+  if (!correctAnswer) return -1;
+  const ca = correctAnswer.trim().toLowerCase().replace(/[().\s]/g, "");
+
+  // Letter form: a, b, c, d → index 0,1,2,3
+  if (/^[a-d]$/.test(ca)) return ca.charCodeAt(0) - 97;
+
+  // Numeric index
+  if (/^\d$/.test(ca)) {
+    const n = parseInt(ca, 10);
+    if (n >= 0 && n < options.length) return n;
+  }
+
+  // Exact option text match (case-insensitive, html-stripped)
+  const strip = (s: string) => s.replace(/<[^>]+>/g, "").toLowerCase().trim();
+  const strippedCA = strip(correctAnswer);
+  const idx = options.findIndex((o) => strip(o) === strippedCA);
+  return idx;
 }
 
 export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
@@ -115,7 +139,8 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
     setRegenerating(true);
     try {
       const bbox = await regenerateDiagramBbox(apiKey, page.base64, question.question_text);
-      const img = await cropFromDataUrl(page.dataUrl, bbox, page.width, page.height);
+      const cropped = await cropFromDataUrl(page.dataUrl, bbox, page.width, page.height);
+      const img = await removeBackground(cropped);
       onChange({ ...question, diagram_bbox: bbox, diagram_image: img, has_diagram: true });
     } catch (e: any) {
       alert("Re-crop failed: " + e.message);
@@ -123,6 +148,11 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
   };
 
   const hasOptionImages = !!question.option_images?.some((x) => !!x);
+  const correctIdx = resolveCorrectIndex(question.correct_answer, question.options);
+
+  const setCorrectByIndex = (i: number) => {
+    onChange({ ...question, correct_answer: String.fromCharCode(97 + i) });
+  };
 
   return (
     <Card className="overflow-hidden border-border/60 shadow-sm">
@@ -130,6 +160,11 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
         <div className="flex items-center gap-2">
           <Badge variant="default" className="font-mono">Q{index + 1}</Badge>
           <span className="text-xs text-muted-foreground">{question.id}</span>
+          {correctIdx >= 0 && (
+            <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-300">
+              ✓ {String.fromCharCode(65 + correctIdx)}
+            </Badge>
+          )}
         </div>
         <div className="flex gap-1">
           <Button size="sm" variant="ghost" onClick={() => setEditing(!editing)}>
@@ -147,7 +182,7 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
         )}
 
         {question.has_diagram && question.diagram_image && (
-          <figure className="rounded-md border bg-white p-3">
+          <figure className="rounded-md border bg-transparent p-3">
             <img src={question.diagram_image} alt="Question diagram" className="mx-auto max-h-72 object-contain" />
           </figure>
         )}
@@ -157,9 +192,9 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
             {question.options.map((opt, i) => {
               const img = question.option_images?.[i];
               const letter = String.fromCharCode(97 + i);
-              const isCorrect = (question.correct_answer || "").toLowerCase().replace(/[()]/g, "").trim() === letter;
+              const isCorrect = i === correctIdx;
               return (
-                <button key={i} onClick={() => onChange({ ...question, correct_answer: letter })}
+                <button key={i} onClick={() => setCorrectByIndex(i)}
                   className={`group flex flex-col items-center gap-2 rounded-lg border-2 bg-white p-3 transition hover:border-primary ${isCorrect ? "border-primary ring-2 ring-primary/20" : "border-border"}`}>
                   <div className="flex w-full items-center justify-between">
                     <Badge variant={isCorrect ? "default" : "outline"} className="font-mono">{String.fromCharCode(65 + i)}</Badge>
@@ -176,16 +211,21 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
           </div>
         ) : (
           <div className="space-y-2">
-            {question.options.map((opt, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <Badge variant={opt === question.correct_answer ? "default" : "outline"} className="mt-0.5 shrink-0 font-mono">{String.fromCharCode(65 + i)}</Badge>
-                {editing ? (
-                  <Input value={opt} onChange={(e) => { const n = [...question.options]; n[i] = e.target.value; onChange({ ...question, options: n }); }} />
-                ) : (
-                  <button onClick={() => onChange({ ...question, correct_answer: opt })} className="flex-1 rounded px-2 py-1 text-left text-sm hover:bg-muted" dangerouslySetInnerHTML={{ __html: opt }} />
-                )}
-              </div>
-            ))}
+            {question.options.map((opt, i) => {
+              const isCorrect = i === correctIdx;
+              return (
+                <div key={i} className="flex items-start gap-2">
+                  <Badge variant={isCorrect ? "default" : "outline"} className="mt-0.5 shrink-0 font-mono">{String.fromCharCode(65 + i)}</Badge>
+                  {editing ? (
+                    <Input value={opt} onChange={(e) => { const n = [...question.options]; n[i] = e.target.value; onChange({ ...question, options: n }); }} />
+                  ) : (
+                    <button onClick={() => setCorrectByIndex(i)}
+                      className={`flex-1 rounded px-2 py-1 text-left text-sm transition hover:bg-muted ${isCorrect ? "bg-primary/5 font-medium" : ""}`}
+                      dangerouslySetInnerHTML={{ __html: opt }} />
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -223,7 +263,7 @@ h1{font-size:1.5rem;margin-bottom:1.5rem}
 .q{border:1px solid var(--line);border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:1.25rem;background:var(--bg);box-shadow:0 1px 2px rgba(0,0,0,.03)}
 .q-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem;color:var(--muted);font-size:.75rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase}
 .q-stem{font-size:1rem;line-height:1.6;margin-bottom:1rem}
-.diagram{margin:1rem auto;padding:.75rem;background:#fff;border:1px solid var(--line);border-radius:10px;text-align:center;max-width:520px}
+.diagram{margin:1rem auto;padding:.75rem;background:transparent;border:1px solid var(--line);border-radius:10px;text-align:center;max-width:520px}
 .diagram img{max-width:100%;height:auto}
 .opts{list-style:none;padding:0;margin:0;display:grid;gap:.5rem}
 .opts.visual{grid-template-columns:1fr 1fr}
@@ -238,13 +278,13 @@ h1{font-size:1.5rem;margin-bottom:1.5rem}
 <h1>Question Set</h1>
 ${questions.map((q, i) => {
   const visual = !!q.option_images?.some(Boolean);
-  const correctIdx = visual ? (q.correct_answer || "").toLowerCase().replace(/[()]/g, "").trim().charCodeAt(0) - 97 : -1;
+  const correctIdx = resolveCorrectIndex(q.correct_answer, q.options);
   return `<div class="q">
 <div class="q-head">Question ${i + 1}</div>
 <div class="q-stem">${q.question_text}</div>
 ${q.has_diagram && q.diagram_image ? `<div class="diagram"><img src="${q.diagram_image}" alt="Diagram"/></div>` : ""}
 <ul class="opts ${visual ? "visual" : ""}">${q.options.map((o, j) => {
-  const isC = visual ? j === correctIdx : o === q.correct_answer;
+  const isC = j === correctIdx;
   const label = String.fromCharCode(65 + j);
   const img = q.option_images?.[j];
   return `<li class="opt ${visual ? "visual" : ""} ${isC ? "correct" : ""}"><span class="opt-label">${label}</span>${img ? `<img class="opt-img" src="${img}" alt="Option ${label}"/>` : `<span>${o}</span>`}</li>`;

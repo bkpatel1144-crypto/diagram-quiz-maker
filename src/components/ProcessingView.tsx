@@ -25,10 +25,11 @@ export function ProcessingView({ file, from, to, apiKey, onDone }: Props) {
     if (ranRef.current) return;
     ranRef.current = true;
     (async () => {
-      const { loadPdf, renderPage, cropFromDataUrl } = await import("@/lib/pdf");
+      const { loadPdf, renderPage, cropFromDataUrl, removeBackground } = await import("@/lib/pdf");
       const pdf = await loadPdf(file);
       const total = to - from + 1;
       const results: PageResult[] = [];
+
       for (let i = 0; i < total; i++) {
         const pageNum = from + i;
         setStatus({ current: i, total, label: `Rendering page ${pageNum}...` });
@@ -38,13 +39,19 @@ export function ProcessingView({ file, from, to, apiKey, onDone }: Props) {
           const questions = await callGemini(apiKey, page.base64);
           for (const q of questions) {
             if (q.has_diagram && q.diagram_bbox) {
-              try { q.diagram_image = await cropFromDataUrl(page.dataUrl, q.diagram_bbox, page.width, page.height); } catch {}
+              try {
+                const cropped = await cropFromDataUrl(page.dataUrl, q.diagram_bbox, page.width, page.height);
+                q.diagram_image = await removeBackground(cropped);
+              } catch {}
             }
             if (q.option_bboxes && q.option_bboxes.length) {
               q.option_images = await Promise.all(
                 q.option_bboxes.map(async (b) => {
                   if (!b) return null;
-                  try { return await cropFromDataUrl(page.dataUrl, b, page.width, page.height); } catch { return null; }
+                  try {
+                    const cropped = await cropFromDataUrl(page.dataUrl, b, page.width, page.height);
+                    return await removeBackground(cropped);
+                  } catch { return null; }
                 })
               );
             }
