@@ -10,7 +10,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Pencil, Check, RefreshCw, Trash2, Download, FileJson, FileCode } from "lucide-react";
 import type { Question } from "@/lib/gemini";
-import { regenerateDiagram } from "@/lib/gemini";
+import { regenerateDiagramBbox } from "@/lib/gemini";
+import { cropFromDataUrl } from "@/lib/pdf";
 
 interface Props {
   results: PageResult[];
