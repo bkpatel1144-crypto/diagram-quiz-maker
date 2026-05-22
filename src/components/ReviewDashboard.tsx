@@ -305,7 +305,7 @@ ${questions
           `<li class="${o === q.correct_answer ? "correct" : ""}">${o}</li>`,
       )
       .join("")}</ol>
-${q.has_diagram ? `<div class="diagram">${q.diagram_svg_code}</div>` : ""}</div>`,
+${q.has_diagram ? `<div class="diagram">${q.diagram_image ? `<img src="${q.diagram_image}" alt="Diagram" style="max-width:100%;height:auto"/>` : q.diagram_svg_code}</div>` : ""}</div>`,
   )
   .join("\n")}
 </body></html>`;
