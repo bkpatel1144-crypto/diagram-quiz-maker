@@ -22,7 +22,7 @@ Output STRICTLY a JSON array of these objects with no markdown fences, no commen
 export async function callGemini(
   apiKey: string,
   imageBase64: string,
-  model = "gemini-2.0-flash",
+  model = "gemini-2.5-flash",
 ): Promise<Question[]> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const res = await fetch(url, {
@@ -73,7 +73,7 @@ export async function regenerateDiagram(
   apiKey: string,
   imageBase64: string,
   questionText: string,
-  model = "gemini-2.0-flash",
+  model = "gemini-2.5-flash",
 ): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const prompt = `Look at the page image and find this question: "${questionText.replace(/<[^>]+>/g, " ").slice(0, 300)}".

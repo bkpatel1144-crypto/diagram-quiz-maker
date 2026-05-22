@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Progress } from "@/components/ui/progress";
-import { loadPdf, renderPage } from "@/lib/pdf";
 import { callGemini, Question } from "@/lib/gemini";
 import type { RenderedPage } from "@/lib/pdf";
 
@@ -26,6 +25,7 @@ export function ProcessingView({ file, from, to, apiKey, onDone }: Props) {
     if (ranRef.current) return;
     ranRef.current = true;
     (async () => {
+      const { loadPdf, renderPage } = await import("@/lib/pdf");
       const pdf = await loadPdf(file);
       const total = to - from + 1;
       const results: PageResult[] = [];
