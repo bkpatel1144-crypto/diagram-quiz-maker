@@ -106,11 +106,19 @@ function normalizeBbox(b: any): Bbox | undefined {
   return [n[0], n[1], n[2], n[3]];
 }
 
-/** Clean question text: collapse newlines into spaces, trim runs of whitespace */
+/**
+ * Clean question/option text:
+ *  - Remove HTML line-break tags (<br>, <br/>, <br />)
+ *  - Convert display-math \[...\] to inline \(...\) so MathJax renders inline
+ *  - Collapse all real newlines and tab characters into a single space
+ *  - Collapse multiple spaces into one
+ */
 function cleanText(raw: string): string {
   return raw
-    .replace(/\r\n|\r|\n/g, " ")
-    .replace(/[ \t]{2,}/g, " ")
+    .replace(/<br\s*\/?>/gi, " ")                       // HTML <br> → space
+    .replace(/\\\[([^]*?)\\\]/g, "\\($1\\)")            // \[...\] → \(...\)
+    .replace(/\r\n|\r|\n|\t/g, " ")                     // real newlines → space
+    .replace(/[ \u00a0]{2,}/g, " ")                     // multiple spaces → one
     .trim();
 }
 

@@ -50,9 +50,15 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
 
   useEffect(() => {
     if ((window as any).MathJax) return;
-    (window as any).MathJax = { tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]] }, svg: { fontCache: "global" } };
+    // Use CHTML renderer: creates compact <span>/<mjx-container> elements that
+    // stay inline without disrupting text flow (unlike SVG which adds block elements).
+    (window as any).MathJax = {
+      tex: { inlineMath: [["\\(", "\\)"]], displayMath: [] }, // no display math
+      chtml: { scale: 1, mathmlSpacing: false },
+      options: { skipHtmlTags: ["script","noscript","style","textarea","pre"] },
+    };
     const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js";
+    s.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
     s.async = true;
     document.head.appendChild(s);
   }, []);
