@@ -114,6 +114,7 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
         </ScrollArea>
 
         <ScrollArea>
+          <div ref={rightPanelRef}>
           <div className="space-y-4 p-4">
             {current.error && (
               <Card className="border-destructive/50 bg-destructive/5 p-4 text-sm text-destructive">
@@ -135,6 +136,7 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
                 onDelete={() => deleteQuestion(i)}
               />
             ))}
+          </div>
           </div>
         </ScrollArea>
       </div>
