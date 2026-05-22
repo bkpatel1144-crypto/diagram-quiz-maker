@@ -2,14 +2,15 @@ import type { Bbox } from "./gemini";
 
 /**
  * Expand a bbox by the given margins (0-1000 space), clamped to [0, 1000].
- * Extra bottom/right bias because AI bboxes tend to under-shoot those edges.
+ * Kept small intentionally — the AI already provides some padding.
+ * Large expansion causes neighbouring text to bleed into the crop.
  */
 export function expandBbox(
   bbox: Bbox,
-  padTop = 18,
-  padLeft = 18,
-  padBottom = 28,
-  padRight = 28,
+  padTop = 8,
+  padLeft = 8,
+  padBottom = 8,
+  padRight = 8,
 ): Bbox {
   const [ymin, xmin, ymax, xmax] = bbox;
   return [
@@ -23,7 +24,6 @@ export function expandBbox(
 /**
  * Crop a region from a page data URL using Gemini-style normalized bbox
  * [ymin, xmin, ymax, xmax] in 0-1000 coords. Returns a PNG data URL.
- * Automatically expands bbox by a small margin so edges are fully included.
  */
 export async function cropFromDataUrl(
   dataUrl: string,
@@ -54,9 +54,10 @@ export async function cropFromDataUrl(
 }
 
 /**
- * Remove white / near-white background from a PNG data URL using canvas pixel manipulation.
- * Flood-fills from the four edges, making all connected background pixels transparent.
- * Returns a PNG data URL with transparent background.
+ * Remove white / near-white background from a PNG/JPEG data URL.
+ * Uses BFS flood-fill from the four edges to remove connected background,
+ * then auto-trims the result to the bounding box of remaining content.
+ * Returns a transparent PNG data URL.
  */
 export async function removeBackground(dataUrl: string): Promise<string> {
   return new Promise((resolve) => {
@@ -73,27 +74,26 @@ export async function removeBackground(dataUrl: string): Promise<string> {
       const imageData = ctx.getImageData(0, 0, W, H);
       const data = imageData.data;
 
-      // Sample corner pixels to confirm the background is light
-      const sampleBrightness = (px: number, py: number) => {
-        const idx = (py * W + px) * 4;
-        return (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+      // Sample corner brightness to confirm a light scanned background
+      const bright = (px: number, py: number) => {
+        const i = (py * W + px) * 4;
+        return (data[i] + data[i + 1] + data[i + 2]) / 3;
       };
-      const avgCorner = (
-        sampleBrightness(0, 0) + sampleBrightness(W - 1, 0) +
-        sampleBrightness(0, H - 1) + sampleBrightness(W - 1, H - 1)
-      ) / 4;
-
-      // Only attempt removal for light (scanned page) backgrounds
-      if (avgCorner < 180) {
+      const avgCorner = (bright(0, 0) + bright(W - 1, 0) + bright(0, H - 1) + bright(W - 1, H - 1)) / 4;
+      if (avgCorner < 160) {
+        // Dark/non-white background — don't modify
         resolve(dataUrl);
         return;
       }
 
-      const BG_THRESHOLD = 235;
+      // Adaptive threshold: slightly below the corner brightness so we
+      // remove the scanned-paper background but keep light-grey diagram lines.
+      const THRESHOLD = Math.max(220, Math.min(248, avgCorner - 8));
+
       const isBackground = (idx: number): boolean =>
-        data[idx] >= BG_THRESHOLD &&
-        data[idx + 1] >= BG_THRESHOLD &&
-        data[idx + 2] >= BG_THRESHOLD;
+        data[idx] >= THRESHOLD &&
+        data[idx + 1] >= THRESHOLD &&
+        data[idx + 2] >= THRESHOLD;
 
       const visited = new Uint8Array(W * H);
       const queue: number[] = [];
@@ -112,29 +112,54 @@ export async function removeBackground(dataUrl: string): Promise<string> {
       for (let x = 0; x < W; x++) { enqueue(x, 0); enqueue(x, H - 1); }
       for (let y = 0; y < H; y++) { enqueue(0, y); enqueue(W - 1, y); }
 
-      // BFS flood-fill
+      // BFS flood-fill → set alpha to 0 for background pixels
       let head = 0;
       while (head < queue.length) {
         const px = queue[head++];
         const py = queue[head++];
-        data[(py * W + px) * 4 + 3] = 0; // transparent
+        data[(py * W + px) * 4 + 3] = 0;
         enqueue(px + 1, py);
         enqueue(px - 1, py);
         enqueue(px, py + 1);
         enqueue(px, py - 1);
       }
 
-      // Second pass: knock out any isolated pure-white pixels inside the diagram
-      for (let i = 0; i < W * H; i++) {
-        const idx = i * 4;
-        if (data[idx + 3] === 0) continue;
-        if (data[idx] > 248 && data[idx + 1] > 248 && data[idx + 2] > 248) {
-          data[idx + 3] = 0;
+      ctx.putImageData(imageData, 0, 0);
+
+      // Auto-trim: find bounding box of non-transparent content
+      const trimmed = ctx.getImageData(0, 0, W, H);
+      const td = trimmed.data;
+      let minX = W, maxX = 0, minY = H, maxY = 0;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          if (td[(y * W + x) * 4 + 3] > 16) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
         }
       }
 
-      ctx.putImageData(imageData, 0, 0);
-      resolve(canvas.toDataURL("image/png"));
+      if (maxX < minX || maxY < minY) {
+        // Nothing left — return original crop without bg removal
+        resolve(dataUrl);
+        return;
+      }
+
+      // Add a small content margin
+      const MARGIN = 6;
+      const cx = Math.max(0, minX - MARGIN);
+      const cy = Math.max(0, minY - MARGIN);
+      const cw = Math.min(W, maxX + MARGIN + 1) - cx;
+      const ch = Math.min(H, maxY + MARGIN + 1) - cy;
+
+      const out = document.createElement("canvas");
+      out.width = cw;
+      out.height = ch;
+      const octx = out.getContext("2d")!;
+      octx.drawImage(canvas, cx, cy, cw, ch, 0, 0, cw, ch);
+      resolve(out.toDataURL("image/png"));
     };
     img.src = dataUrl;
   });

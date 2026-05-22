@@ -21,28 +21,33 @@ export interface Question {
 const SYSTEM_PROMPT = `You are a meticulous OCR engine for physics/maths MCQ books. Extract EVERY multiple-choice question from the page image with 100% fidelity.
 
 STRICT RULES:
-1. Copy question stems, numbers, units, subscripts, superscripts EXACTLY. NEVER paraphrase, NEVER summarize.
-2. Wrap EVERY mathematical symbol, variable, fraction, exponent, vector, Greek letter, or unit expression in LaTeX: inline \\( ... \\), display \\[ ... \\]. Examples: \\(V_{BE}\\), \\(\\frac{1}{r_i}\\), \\(3 \\times 10^8\\,\\text{m/s}\\).
-3. Strip leading labels "(a)", "(A)", "1.", "i)" from options — keep only the option content as one string.
-4. correct_answer: exact string from options if the source marks one; else "".
+1. Copy question stems EXACTLY as one continuous string — NO line breaks, NO splitting on sub-expressions. Merge the full sentence into a single flowing line.
+2. Wrap EVERY mathematical symbol, variable, fraction, exponent, vector, Greek letter, or unit in LaTeX: inline \\( ... \\). Examples: \\(R_T\\), \\(G_1\\), \\(V_{BE}\\), \\(3 \\times 10^8\\,\\text{m/s}\\).
+3. Strip leading labels "(a)", "(A)", "1.", "i)" from options — keep only the option content.
+4. correct_answer: use lowercase letter "a"/"b"/"c"/"d" matching the correct option index (0-based: a=first, b=second…). If not marked, use "".
 5. id: "q1","q2",... in reading order.
 6. Skip headings, instructions, answer keys, worked solutions.
 
-DIAGRAM HANDLING — read carefully:
+BOUNDING BOX RULES — read very carefully:
+- Coordinates are 0–1000 normalized [ymin, xmin, ymax, xmax] relative to the full page image.
+- A bbox must fully enclose the diagram including ALL lines, labels, arrows, axes, and component symbols. Never clip any part.
+- Measure to the OUTERMOST visible element of the diagram, then add exactly 6 units on every side.
+- DO NOT include question text, question number, or option labels inside the bbox.
+- Each option bbox must contain ONLY that option's figure — not neighbouring figures and not the question text above.
 
 CASE A — Text options (a/b/c/d are words/numbers/formulas):
-  - If the QUESTION has a figure (circuit/graph/ray/geometry) above or beside the stem, set has_diagram=true and return diagram_bbox as a TIGHT box around ONLY the figure. DO NOT include the question text, the number "Q.2", or the options inside the box. Add ~8 units padding. Coordinates are normalized 0–1000 as [ymin, xmin, ymax, xmax].
-  - options = the text strings. option_bboxes = null (omit).
+  - If the question has its own figure, set has_diagram=true and diagram_bbox = tight box around ONLY that figure.
+  - options = the text strings. option_bboxes omitted.
 
-CASE B — Visual options (a/b/c/d are themselves diagrams/circuits/graphs/figures):
-  - This is critical: when each option is a picture, DO NOT lump them into diagram_bbox.
+CASE B — Visual options (a/b/c/d are themselves diagrams/circuits/graphs):
+  - CRITICAL: scan the FULL vertical and horizontal extent of each option figure before setting its bbox.
   - Set has_diagram=false, diagram_bbox=null.
-  - options = ["(a)","(b)","(c)","(d)"] placeholder labels (one per option in order).
-  - option_bboxes = array of TIGHT bboxes, one per option, each around ONLY that option's figure (exclude the "(a)"/"(b)" label and exclude neighboring options). Same length & order as options.
+  - options = ["(a)","(b)","(c)","(d)"] (placeholder labels, one per option).
+  - option_bboxes = array of TIGHT bboxes, one per option. Each bbox must wrap the COMPLETE circuit/graph for that option from top-most element to bottom-most element. Include every wire, component, and label that belongs to that option.
 
-CASE C — Mixed (question has its OWN figure AND options are figures): use diagram_bbox for the stem's figure AND option_bboxes for the option figures.
+CASE C — Mixed (question has its own figure AND options are figures): use diagram_bbox for the stem figure AND option_bboxes for each option figure.
 
-OUTPUT — return ONLY a JSON array (no prose, no fences). Schema:
+OUTPUT — return ONLY a JSON array (no prose, no markdown fences). Schema:
 {"id":string,"question_text":string,"options":string[],"option_bboxes":([number,number,number,number]|null)[]|null,"correct_answer":string,"has_diagram":boolean,"diagram_bbox":[number,number,number,number]|null}`;
 
 async function geminiRequest(apiKey: string, imageBase64: string, prompt: string, model = "gemini-2.5-pro"): Promise<string> {
@@ -101,14 +106,22 @@ function normalizeBbox(b: any): Bbox | undefined {
   return [n[0], n[1], n[2], n[3]];
 }
 
+/** Clean question text: collapse newlines into spaces, trim runs of whitespace */
+function cleanText(raw: string): string {
+  return raw
+    .replace(/\r\n|\r|\n/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 function normalize(parsed: any[]): Question[] {
   return parsed.map((q: any, i: number) => {
-    const options = Array.isArray(q?.options) ? q.options.map((o: any) => String(o ?? "")) : [];
+    const options = Array.isArray(q?.options) ? q.options.map((o: any) => cleanText(String(o ?? ""))) : [];
     const obbRaw = Array.isArray(q?.option_bboxes) ? q.option_bboxes : null;
     const option_bboxes = obbRaw ? obbRaw.map((b: any) => normalizeBbox(b) ?? null) : undefined;
     return {
       id: typeof q?.id === "string" && q.id ? q.id : `q${i + 1}`,
-      question_text: String(q?.question_text ?? "").trim(),
+      question_text: cleanText(String(q?.question_text ?? "")),
       options,
       option_bboxes,
       correct_answer: String(q?.correct_answer ?? ""),

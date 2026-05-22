@@ -182,8 +182,8 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
         )}
 
         {question.has_diagram && question.diagram_image && (
-          <figure className="rounded-md border bg-transparent p-3">
-            <img src={question.diagram_image} alt="Question diagram" className="mx-auto max-h-72 object-contain" />
+          <figure className="rounded-md border p-3" style={{ background: "repeating-conic-gradient(#d4d4d4 0% 25%, #ffffff 0% 50%) 0 0 / 14px 14px" }}>
+            <img src={question.diagram_image} alt="Question diagram" className="mx-auto max-h-72 object-contain drop-shadow-sm" />
           </figure>
         )}
 
@@ -195,13 +195,15 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
               const isCorrect = i === correctIdx;
               return (
                 <button key={i} onClick={() => setCorrectByIndex(i)}
-                  className={`group flex flex-col items-center gap-2 rounded-lg border-2 bg-white p-3 transition hover:border-primary ${isCorrect ? "border-primary ring-2 ring-primary/20" : "border-border"}`}>
+                  className={`group flex flex-col items-center gap-2 rounded-lg border-2 p-3 transition hover:border-primary ${isCorrect ? "border-primary ring-2 ring-primary/20" : "border-border"}`}>
                   <div className="flex w-full items-center justify-between">
                     <Badge variant={isCorrect ? "default" : "outline"} className="font-mono">{String.fromCharCode(65 + i)}</Badge>
                     {isCorrect && <span className="text-[10px] font-semibold uppercase text-primary">Correct</span>}
                   </div>
                   {img ? (
-                    <img src={img} alt={`Option ${letter}`} className="max-h-40 w-full object-contain" />
+                    <div className="w-full rounded" style={{ background: "repeating-conic-gradient(#d4d4d4 0% 25%, #ffffff 0% 50%) 0 0 / 14px 14px" }}>
+                      <img src={img} alt={`Option ${letter}`} className="max-h-40 w-full object-contain drop-shadow-sm" />
+                    </div>
                   ) : (
                     <div className="flex h-24 items-center justify-center text-xs text-muted-foreground">no image</div>
                   )}
