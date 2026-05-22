@@ -41,6 +41,7 @@ export async function callGemini(
       generationConfig: {
         temperature: 0.2,
         responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
   });
