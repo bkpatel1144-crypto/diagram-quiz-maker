@@ -18,7 +18,7 @@ export async function loadPdf(file: File) {
 export async function renderPage(
   pdf: any,
   pageNumber: number,
-  scale = 2,
+  scale = 1.4,
 ): Promise<RenderedPage> {
   const page = await pdf.getPage(pageNumber);
   const viewport = page.getViewport({ scale });
@@ -27,7 +27,7 @@ export async function renderPage(
   canvas.height = viewport.height;
   const ctx = canvas.getContext("2d")!;
   await page.render({ canvasContext: ctx, viewport, canvas }).promise;
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
   const base64 = dataUrl.split(",")[1];
   return { pageNumber, dataUrl, base64 };
 }

@@ -92,7 +92,7 @@ Produce ONLY a single clean, accurate self-contained <svg viewBox="0 0 400 300" 
           ],
         },
       ],
-      generationConfig: { temperature: 0.3 },
+      generationConfig: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } },
     }),
   });
   if (!res.ok) throw new Error(`Gemini error ${res.status}`);
