@@ -7,18 +7,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Pencil, Check, RefreshCw, Trash2, FileJson, FileCode } from "lucide-react";
-import type { Question } from "@/lib/gemini";
+import {
+  Pencil, Check, RefreshCw, Trash2, FileJson, FileCode, Crop, CheckCircle2,
+} from "lucide-react";
+import type { Question, Bbox } from "@/lib/gemini";
 import { regenerateDiagramBbox } from "@/lib/gemini";
 import { cropFromDataUrl, removeBackground } from "@/lib/pdf-utils";
+import { DiagramCropEditor, type CropTarget } from "@/components/DiagramCropEditor";
 
-/**
- * Sanitize question/option text at DISPLAY TIME.
- * Handles old cached data that was processed before the cleanText fix.
- * - Strips <br> / <br/> tags → space
- * - Converts display-math \[...\] → inline \(...\) so MathJax renders inline
- * - Collapses newlines / tabs → space
- */
 function sanitizeDisplay(raw: string): string {
   return raw
     .replace(/<br\s*\/?>/gi, " ")
@@ -28,7 +24,6 @@ function sanitizeDisplay(raw: string): string {
     .trim();
 }
 
-/** Inline SVG data-URI checkerboard — works in every browser */
 const CHECKER_BG = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Crect width='8' height='8' fill='%23d0d0d0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23d0d0d0'/%3E%3C/svg%3E") #fff`;
 
 interface Props {
@@ -38,28 +33,16 @@ interface Props {
   onReset: () => void;
 }
 
-/**
- * Resolve the correct-answer index (0-based) from whatever format the AI returned.
- * Handles: "a"/"b"/"c"/"d", "(a)"/"(b)", "A"/"B", full option text, or index string "0"/"1".
- */
 function resolveCorrectIndex(correctAnswer: string, options: string[]): number {
   if (!correctAnswer) return -1;
   const ca = correctAnswer.trim().toLowerCase().replace(/[().\s]/g, "");
-
-  // Letter form: a, b, c, d → index 0,1,2,3
   if (/^[a-d]$/.test(ca)) return ca.charCodeAt(0) - 97;
-
-  // Numeric index
   if (/^\d$/.test(ca)) {
     const n = parseInt(ca, 10);
     if (n >= 0 && n < options.length) return n;
   }
-
-  // Exact option text match (case-insensitive, html-stripped)
   const strip = (s: string) => s.replace(/<[^>]+>/g, "").toLowerCase().trim();
-  const strippedCA = strip(correctAnswer);
-  const idx = options.findIndex((o) => strip(o) === strippedCA);
-  return idx;
+  return options.findIndex((o) => strip(o) === strip(correctAnswer));
 }
 
 export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
@@ -69,12 +52,10 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
 
   useEffect(() => {
     if ((window as any).MathJax) return;
-    // Use CHTML renderer: creates compact <span>/<mjx-container> elements that
-    // stay inline without disrupting text flow (unlike SVG which adds block elements).
     (window as any).MathJax = {
-      tex: { inlineMath: [["\\(", "\\)"]], displayMath: [] }, // no display math
+      tex: { inlineMath: [["\\(", "\\)"]], displayMath: [] },
       chtml: { scale: 1, mathmlSpacing: false },
-      options: { skipHtmlTags: ["script","noscript","style","textarea","pre"] },
+      options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre"] },
     };
     const s = document.createElement("script");
     s.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
@@ -84,7 +65,8 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
 
   useEffect(() => {
     const mj = (window as any).MathJax;
-    if (mj?.typesetPromise && rightPanelRef.current) mj.typesetPromise([rightPanelRef.current]).catch(() => {});
+    if (mj?.typesetPromise && rightPanelRef.current)
+      mj.typesetPromise([rightPanelRef.current]).catch(() => {});
   }, [results, active]);
 
   const updateQuestion = (idx: number, q: Question) => {
@@ -105,11 +87,17 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
       <header className="flex items-center justify-between border-b bg-card px-6 py-3">
         <div>
           <h1 className="font-semibold tracking-tight">Review & Edit</h1>
-          <p className="text-xs text-muted-foreground">{allQuestions.length} questions across {results.length} pages</p>
+          <p className="text-xs text-muted-foreground">
+            {allQuestions.length} questions across {results.length} pages
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => exportJSON(allQuestions)}><FileJson className="mr-1 h-4 w-4" /> JSON</Button>
-          <Button variant="outline" size="sm" onClick={() => exportHTML(allQuestions)}><FileCode className="mr-1 h-4 w-4" /> HTML</Button>
+          <Button variant="outline" size="sm" onClick={() => exportJSON(allQuestions)}>
+            <FileJson className="mr-1 h-4 w-4" /> JSON
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => exportHTML(allQuestions)}>
+            <FileCode className="mr-1 h-4 w-4" /> HTML
+          </Button>
           <Button variant="ghost" size="sm" onClick={onReset}>New PDF</Button>
         </div>
       </header>
@@ -130,20 +118,36 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
       <div className="grid flex-1 grid-cols-2 overflow-hidden">
         <ScrollArea className="border-r bg-muted/10">
           <div className="p-4">
-            <img src={current.page.dataUrl} alt={`Page ${current.page.pageNumber}`} className="w-full rounded-lg border shadow-sm" />
+            <img
+              src={current.page.dataUrl}
+              alt={`Page ${current.page.pageNumber}`}
+              className="w-full rounded-lg border shadow-sm"
+            />
           </div>
         </ScrollArea>
-
         <ScrollArea>
           <div ref={rightPanelRef}>
             <div className="space-y-5 p-5">
-              {current.error && <Card className="border-destructive/50 bg-destructive/5 p-4 text-sm text-destructive">{current.error}</Card>}
+              {current.error && (
+                <Card className="border-destructive/50 bg-destructive/5 p-4 text-sm text-destructive">
+                  {current.error}
+                </Card>
+              )}
               {current.questions.length === 0 && !current.error && (
-                <Card className="p-8 text-center text-sm text-muted-foreground">No questions detected on this page.</Card>
+                <Card className="p-8 text-center text-sm text-muted-foreground">
+                  No questions detected on this page.
+                </Card>
               )}
               {current.questions.map((q, i) => (
-                <QuestionEditor key={q.id + i} question={q} page={current.page} apiKey={apiKey}
-                  onChange={(nq) => updateQuestion(i, nq)} onDelete={() => deleteQuestion(i)} index={i} />
+                <QuestionEditor
+                  key={q.id + i}
+                  question={q}
+                  page={current.page}
+                  apiKey={apiKey}
+                  onChange={(nq) => updateQuestion(i, nq)}
+                  onDelete={() => deleteQuestion(i)}
+                  index={i}
+                />
               ))}
             </div>
           </div>
@@ -153,14 +157,33 @@ export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
   );
 }
 
-function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
-  question: Question; page: import("@/lib/pdf").RenderedPage; apiKey: string;
-  onChange: (q: Question) => void; onDelete: () => void; index: number;
+/* ───────────────────────────── QuestionEditor ───────────────────── */
+
+function QuestionEditor({
+  question, page, apiKey, onChange, onDelete, index,
+}: {
+  question: Question;
+  page: import("@/lib/pdf").RenderedPage;
+  apiKey: string;
+  onChange: (q: Question) => void;
+  onDelete: () => void;
+  index: number;
 }) {
   const [editing, setEditing] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [cropState, setCropState] = useState<{
+    target: CropTarget;
+    initialBbox?: Bbox;
+  } | null>(null);
 
-  const handleRegen = async () => {
+  const correctIdx = resolveCorrectIndex(question.correct_answer, question.options);
+  const hasOptionImages = !!question.option_images?.some(Boolean);
+
+  const setCorrectByIndex = (i: number) =>
+    onChange({ ...question, correct_answer: String.fromCharCode(97 + i) });
+
+  /* AI re-crop for main diagram */
+  const handleAiRegen = async () => {
     setRegenerating(true);
     try {
       const bbox = await regenerateDiagramBbox(apiKey, page.base64, question.question_text);
@@ -168,111 +191,284 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
       const img = await removeBackground(cropped);
       onChange({ ...question, diagram_bbox: bbox, diagram_image: img, has_diagram: true });
     } catch (e: any) {
-      alert("Re-crop failed: " + e.message);
-    } finally { setRegenerating(false); }
+      alert("AI re-crop failed: " + e.message);
+    } finally {
+      setRegenerating(false);
+    }
   };
 
-  const hasOptionImages = !!question.option_images?.some((x) => !!x);
-  const correctIdx = resolveCorrectIndex(question.correct_answer, question.options);
-
-  const setCorrectByIndex = (i: number) => {
-    onChange({ ...question, correct_answer: String.fromCharCode(97 + i) });
+  /* Apply result from crop editor */
+  const handleCropApply = (dataUrl: string, bbox: Bbox) => {
+    if (!cropState) return;
+    if (cropState.target.type === "diagram") {
+      onChange({ ...question, diagram_bbox: bbox, diagram_image: dataUrl, has_diagram: true });
+    } else {
+      const imgs = [...(question.option_images ?? question.options.map(() => null))];
+      imgs[cropState.target.optionIndex!] = dataUrl;
+      onChange({ ...question, option_images: imgs });
+    }
+    setCropState(null);
   };
 
   return (
-    <Card className="overflow-hidden border-border/60 shadow-sm">
-      <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-2">
-        <div className="flex items-center gap-2">
-          <Badge variant="default" className="font-mono">Q{index + 1}</Badge>
-          <span className="text-xs text-muted-foreground">{question.id}</span>
-          {correctIdx >= 0 && (
-            <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-300">
-              ✓ {String.fromCharCode(65 + correctIdx)}
-            </Badge>
-          )}
-        </div>
-        <div className="flex gap-1">
-          <Button size="sm" variant="ghost" onClick={() => setEditing(!editing)}>
-            {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onDelete}><Trash2 className="h-4 w-4 text-destructive" /></Button>
-        </div>
-      </div>
-
-      <div className="space-y-4 p-4">
-        {editing ? (
-          <Textarea value={question.question_text} onChange={(e) => onChange({ ...question, question_text: e.target.value })} rows={4} className="font-mono text-xs" />
-        ) : (
-          <div className="prose prose-sm max-w-none text-[15px] leading-relaxed text-foreground"
-            dangerouslySetInnerHTML={{ __html: sanitizeDisplay(question.question_text) }} />
-        )}
-
-        {question.has_diagram && question.diagram_image && (
-          <figure className="rounded-md border p-3" style={{ background: CHECKER_BG }}>
-            <img src={question.diagram_image} alt="Question diagram" className="mx-auto max-h-72 object-contain" />
-          </figure>
-        )}
-
-        {hasOptionImages ? (
-          <div className="grid grid-cols-2 gap-3">
-            {question.options.map((opt, i) => {
-              const img = question.option_images?.[i];
-              const letter = String.fromCharCode(97 + i);
-              const isCorrect = i === correctIdx;
-              return (
-                <button key={i} onClick={() => setCorrectByIndex(i)}
-                  className={`group flex flex-col items-center gap-2 rounded-lg border-2 p-3 transition hover:border-primary ${isCorrect ? "border-primary ring-2 ring-primary/20" : "border-border"}`}>
-                  <div className="flex w-full items-center justify-between">
-                    <Badge variant={isCorrect ? "default" : "outline"} className="font-mono">{String.fromCharCode(65 + i)}</Badge>
-                    {isCorrect && <span className="text-[10px] font-semibold uppercase text-primary">Correct</span>}
-                  </div>
-                  {img ? (
-                    <div className="w-full rounded p-1" style={{ background: CHECKER_BG }}>
-                      <img src={img} alt={`Option ${letter}`} className="max-h-44 w-full object-contain" />
-                    </div>
-                  ) : (
-                    <div className="flex h-24 items-center justify-center text-xs text-muted-foreground">no image</div>
-                  )}
-                </button>
-              );
-            })}
+    <>
+      <Card className="overflow-hidden border-border/60 shadow-sm">
+        {/* ── Card header ── */}
+        <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-2">
+          <div className="flex items-center gap-2">
+            <Badge variant="default" className="font-mono">Q{index + 1}</Badge>
+            <span className="text-xs text-muted-foreground">{question.id}</span>
+            {correctIdx >= 0 && (
+              <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-300">
+                ✓ {String.fromCharCode(65 + correctIdx)}
+              </Badge>
+            )}
           </div>
-        ) : (
-          <div className="space-y-2">
-            {question.options.map((opt, i) => {
-              const isCorrect = i === correctIdx;
-              return (
-                <div key={i} className="flex items-start gap-2">
-                  <Badge variant={isCorrect ? "default" : "outline"} className="mt-0.5 shrink-0 font-mono">{String.fromCharCode(65 + i)}</Badge>
-                  {editing ? (
-                    <Input value={opt} onChange={(e) => { const n = [...question.options]; n[i] = e.target.value; onChange({ ...question, options: n }); }} />
-                  ) : (
-                    <button onClick={() => setCorrectByIndex(i)}
-                      className={`flex-1 rounded px-2 py-1 text-left text-sm transition hover:bg-muted ${isCorrect ? "bg-primary/5 font-medium" : ""}`}
-                      dangerouslySetInnerHTML={{ __html: sanitizeDisplay(opt) }} />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {question.has_diagram && (
-          <div className="flex justify-end">
-            <Button size="sm" variant="ghost" onClick={handleRegen} disabled={regenerating} className="text-xs">
-              <RefreshCw className={`mr-1 h-3 w-3 ${regenerating ? "animate-spin" : ""}`} /> Re-crop diagram
+          <div className="flex gap-1">
+            <Button size="sm" variant="ghost" onClick={() => setEditing((v) => !v)}>
+              {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onDelete}>
+              <Trash2 className="h-4 w-4 text-destructive" />
             </Button>
           </div>
-        )}
-      </div>
-    </Card>
+        </div>
+
+        <div className="space-y-4 p-4">
+          {/* Question stem */}
+          {editing ? (
+            <Textarea
+              value={question.question_text}
+              onChange={(e) => onChange({ ...question, question_text: e.target.value })}
+              rows={4}
+              className="font-mono text-xs"
+            />
+          ) : (
+            <div
+              className="prose prose-sm max-w-none text-[15px] leading-relaxed text-foreground"
+              dangerouslySetInnerHTML={{ __html: sanitizeDisplay(question.question_text) }}
+            />
+          )}
+
+          {/* Main question diagram */}
+          {question.has_diagram && question.diagram_image && (
+            <figure className="rounded-md border p-3" style={{ background: CHECKER_BG }}>
+              <img
+                src={question.diagram_image}
+                alt="Question diagram"
+                className="mx-auto max-h-72 object-contain"
+              />
+              {/* Crop button shown only in edit mode */}
+              {editing && (
+                <div className="mt-2 flex justify-center">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5 text-xs"
+                    onClick={() =>
+                      setCropState({
+                        target: { type: "diagram", label: `Q${index + 1} — main diagram` },
+                        initialBbox: question.diagram_bbox as Bbox | undefined,
+                      })
+                    }
+                  >
+                    <Crop className="h-3 w-3" /> Crop diagram
+                  </Button>
+                </div>
+              )}
+            </figure>
+          )}
+
+          {/* Option images */}
+          {hasOptionImages ? (
+            <div className="grid grid-cols-2 gap-3">
+              {question.options.map((_, i) => {
+                const img = question.option_images?.[i];
+                const isCorrect = i === correctIdx;
+                const letter = String.fromCharCode(65 + i);
+
+                return (
+                  /* plain div — no accidental correct-answer toggle on image click */
+                  <div
+                    key={i}
+                    className={`flex flex-col gap-2 rounded-lg border-2 p-3 transition-colors ${
+                      isCorrect ? "border-primary bg-primary/5" : "border-border"
+                    }`}
+                  >
+                    {/* Option header row */}
+                    <div className="flex items-center justify-between">
+                      <Badge
+                        variant={isCorrect ? "default" : "outline"}
+                        className="font-mono"
+                      >
+                        {letter}
+                      </Badge>
+
+                      <div className="flex items-center gap-1">
+                        {/* Mark correct button */}
+                        <button
+                          title={isCorrect ? "Marked correct" : "Mark as correct"}
+                          onClick={() => setCorrectByIndex(i)}
+                          className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold transition ${
+                            isCorrect
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                          }`}
+                        >
+                          <CheckCircle2 className="h-3 w-3" />
+                          {isCorrect ? "Correct" : "Mark correct"}
+                        </button>
+
+                        {/* Crop button — always visible in edit mode, hover-only otherwise */}
+                        {img ? (
+                          editing ? (
+                            <button
+                              title="Crop this option"
+                              onClick={() =>
+                                setCropState({
+                                  target: {
+                                    type: "option",
+                                    optionIndex: i,
+                                    label: `Q${index + 1} — Option ${letter}`,
+                                  },
+                                })
+                              }
+                              className="flex items-center gap-1 rounded bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground transition hover:bg-muted/80 hover:text-foreground"
+                            >
+                              <Crop className="h-3 w-3" /> Crop
+                            </button>
+                          ) : null
+                        ) : null}
+                      </div>
+                    </div>
+
+                    {/* Image area */}
+                    {img ? (
+                      <div className="w-full rounded p-1" style={{ background: CHECKER_BG }}>
+                        <img
+                          src={img}
+                          alt={`Option ${letter}`}
+                          className="max-h-44 w-full object-contain"
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex h-24 flex-col items-center justify-center gap-2 rounded border border-dashed border-border text-xs text-muted-foreground">
+                        <span>no image</span>
+                        <button
+                          onClick={() =>
+                            setCropState({
+                              target: {
+                                type: "option",
+                                optionIndex: i,
+                                label: `Q${index + 1} — Option ${letter}`,
+                              },
+                            })
+                          }
+                          className="flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-primary hover:underline"
+                        >
+                          <Crop className="h-3 w-3" /> Crop from page
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* Text options */
+            <div className="space-y-2">
+              {question.options.map((opt, i) => {
+                const isCorrect = i === correctIdx;
+                return (
+                  <div key={i} className="flex items-start gap-2">
+                    <Badge
+                      variant={isCorrect ? "default" : "outline"}
+                      className="mt-0.5 shrink-0 font-mono"
+                    >
+                      {String.fromCharCode(65 + i)}
+                    </Badge>
+                    {editing ? (
+                      <Input
+                        value={opt}
+                        onChange={(e) => {
+                          const n = [...question.options];
+                          n[i] = e.target.value;
+                          onChange({ ...question, options: n });
+                        }}
+                      />
+                    ) : (
+                      <button
+                        onClick={() => setCorrectByIndex(i)}
+                        className={`flex-1 rounded px-2 py-1 text-left text-sm transition hover:bg-muted ${
+                          isCorrect ? "bg-primary/5 font-medium" : ""
+                        }`}
+                        dangerouslySetInnerHTML={{ __html: sanitizeDisplay(opt) }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Diagram toolbar — only in edit mode */}
+          {editing && question.has_diagram && (
+            <div className="flex items-center justify-end gap-2 border-t pt-2">
+              {!question.diagram_image && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5 text-xs"
+                  onClick={() =>
+                    setCropState({
+                      target: { type: "diagram", label: `Q${index + 1} — main diagram` },
+                      initialBbox: question.diagram_bbox as Bbox | undefined,
+                    })
+                  }
+                >
+                  <Crop className="h-3 w-3" /> Crop diagram
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleAiRegen}
+                disabled={regenerating}
+                className="gap-1.5 text-xs"
+              >
+                <RefreshCw className={`h-3 w-3 ${regenerating ? "animate-spin" : ""}`} />
+                AI re-crop
+              </Button>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Crop editor modal */}
+      {cropState && (
+        <DiagramCropEditor
+          pageDataUrl={page.dataUrl}
+          pageWidth={page.width}
+          pageHeight={page.height}
+          initialBbox={cropState.initialBbox}
+          target={cropState.target}
+          onApply={handleCropApply}
+          onClose={() => setCropState(null)}
+        />
+      )}
+    </>
   );
 }
+
+/* ───────────────────────────── Export helpers ───────────────────── */
 
 function download(filename: string, content: string, mime: string) {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
   URL.revokeObjectURL(url);
 }
 
@@ -312,11 +508,11 @@ ${questions.map((q, i) => {
 <div class="q-stem">${q.question_text}</div>
 ${q.has_diagram && q.diagram_image ? `<div class="diagram"><img src="${q.diagram_image}" alt="Diagram"/></div>` : ""}
 <ul class="opts ${visual ? "visual" : ""}">${q.options.map((o, j) => {
-  const isC = j === correctIdx;
-  const label = String.fromCharCode(65 + j);
-  const img = q.option_images?.[j];
-  return `<li class="opt ${visual ? "visual" : ""} ${isC ? "correct" : ""}"><span class="opt-label">${label}</span>${img ? `<img class="opt-img" src="${img}" alt="Option ${label}"/>` : `<span>${o}</span>`}</li>`;
-}).join("")}</ul>
+    const isC = j === correctIdx;
+    const label = String.fromCharCode(65 + j);
+    const img = q.option_images?.[j];
+    return `<li class="opt ${visual ? "visual" : ""} ${isC ? "correct" : ""}"><span class="opt-label">${label}</span>${img ? `<img class="opt-img" src="${img}" alt="Option ${label}"/>` : `<span>${o}</span>`}</li>`;
+  }).join("")}</ul>
 </div>`;
 }).join("\n")}
 </body></html>`;
