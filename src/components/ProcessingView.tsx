@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Progress } from "@/components/ui/progress";
-import { loadPdf, renderPage, RenderedPage } from "@/lib/pdf";
+import { loadPdf, renderPage } from "@/lib/pdf";
 import { callGemini, Question } from "@/lib/gemini";
+import type { RenderedPage } from "@/lib/pdf";
 
 export interface PageResult {
   page: RenderedPage;
@@ -19,7 +20,7 @@ interface Props {
 
 export function ProcessingView({ file, from, to, apiKey, onDone }: Props) {
   const ranRef = useRef(false);
-  const [status, setStatus] = useStateImpl();
+  const [status, setStatus] = useState({ current: 0, total: to - from + 1, label: "Preparing..." });
 
   useEffect(() => {
     if (ranRef.current) return;
@@ -32,12 +33,12 @@ export function ProcessingView({ file, from, to, apiKey, onDone }: Props) {
         const pageNum = from + i;
         setStatus({ current: i, total, label: `Rendering page ${pageNum}...` });
         const page = await renderPage(pdf, pageNum);
-        setStatus({ current: i, total, label: `Analyzing page ${pageNum} with AI...` });
+        setStatus({ current: i, total, label: `Analyzing page ${pageNum} with Gemini...` });
         try {
           const questions = await callGemini(apiKey, page.base64);
           results.push({ page, questions });
         } catch (e: any) {
-          results.push({ page, questions: [], error: e.message });
+          results.push({ page, questions: [], error: e?.message ?? String(e) });
         }
       }
       setStatus({ current: total, total, label: "Done" });
@@ -56,14 +57,4 @@ export function ProcessingView({ file, from, to, apiKey, onDone }: Props) {
       <Progress value={pct} />
     </div>
   );
-}
-
-// Minimal local state helper to avoid extra import noise above
-function useStateImpl() {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const React = require("react");
-  return React.useState({ current: 0, total: 1, label: "Preparing..." }) as [
-    { current: number; total: number; label: string },
-    (s: { current: number; total: number; label: string }) => void,
-  ];
 }
