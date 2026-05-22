@@ -16,10 +16,6 @@ export function expandBbox(
   ];
 }
 
-/**
- * Crop a region from a page data URL using Gemini-style normalized bbox
- * [ymin, xmin, ymax, xmax] in 0-1000 coords. Returns a PNG data URL.
- */
 export async function cropFromDataUrl(
   dataUrl: string,
   rawBbox: Bbox,
@@ -48,22 +44,14 @@ export async function cropFromDataUrl(
 }
 
 /**
- * After background removal, scan from the top of the image to find where
- * "real diagram content" begins — skipping any question-text rows that bled
- * in because Gemini's ymin was too high.
- *
- * Strategy:
- *   1. Mark each row as "has content" (≥ MIN_DARK non-transparent pixels).
- *   2. Find the LAST significant empty gap (≥ MIN_GAP consecutive empty rows)
- *      in the top SCAN_FRAC of the image.
- *   3. Return the first content row after that gap — the diagram truly starts there.
- *
- * If no qualifying gap is found, returns 0 (no trimming).
+ * Find where diagram content actually starts from the top of the image.
+ * Used to strip question-text rows that Gemini included above the circuit.
+ * Looks for the last significant empty gap in the top portion of the image.
  */
 function findDiagramTopRow(data: Uint8ClampedArray, W: number, H: number): number {
-  const SCAN_H    = Math.floor(H * 0.55); // only look at top 55 %
-  const MIN_DARK  = Math.max(3, Math.floor(W * 0.01)); // ≥1 % of width must be dark
-  const MIN_GAP   = 6;  // gap must be ≥ 6 rows to count as a separator
+  const SCAN_H   = Math.floor(H * 0.55);
+  const MIN_DARK = Math.max(3, Math.floor(W * 0.01));
+  const MIN_GAP  = 6;
 
   const hasContent = new Uint8Array(SCAN_H);
   for (let y = 0; y < SCAN_H; y++) {
@@ -74,10 +62,8 @@ function findDiagramTopRow(data: Uint8ClampedArray, W: number, H: number): numbe
     hasContent[y] = dark >= MIN_DARK ? 1 : 0;
   }
 
-  // Walk through, recording the end-row of the last significant gap
   let lastGapEnd = 0;
   let gapStart   = -1;
-
   for (let y = 0; y < SCAN_H; y++) {
     if (!hasContent[y]) {
       if (gapStart < 0) gapStart = y;
@@ -88,16 +74,26 @@ function findDiagramTopRow(data: Uint8ClampedArray, W: number, H: number): numbe
       }
     }
   }
-
   return lastGapEnd;
 }
 
 /**
- * Remove white / near-white background from a data URL using BFS flood-fill
- * from all four edges, then auto-trim to the bounding box of remaining content.
+ * Remove the background from a cropped diagram image.
  *
- * @param trimLeadingText  When true (used for option images), also strip rows of
- *                         question-text that bleed in above the diagram.
+ * Strategy — global pixel threshold (works on any topology, including
+ * enclosed white areas inside circuit component boxes):
+ *
+ *   1. Sample the four corners to estimate the background brightness.
+ *      If the image is dark (e.g. dark-background photo), skip removal.
+ *   2. Mark every pixel as transparent whose luminance is above the
+ *      adaptive threshold — this removes the outer background AND all
+ *      enclosed white fill inside circuit components in one pass.
+ *   3. Optionally strip leading text rows (for option images where Gemini
+ *      included question-stem text above the circuit).
+ *   4. Auto-trim the result to the tight bounding box of remaining content.
+ *
+ * @param trimLeadingText  Pass true for option images to strip text that
+ *                         bled in from the question stem above the circuit.
  */
 export async function removeBackground(
   dataUrl: string,
@@ -117,7 +113,7 @@ export async function removeBackground(
       const imageData = ctx.getImageData(0, 0, W, H);
       const data = imageData.data;
 
-      // ── 1. Detect background brightness from corners ───────────────────
+      // ── 1. Measure corner brightness ──────────────────────────────────
       const bright = (px: number, py: number) => {
         const i = (py * W + px) * 4;
         return (data[i] + data[i + 1] + data[i + 2]) / 3;
@@ -125,67 +121,45 @@ export async function removeBackground(
       const avgCorner =
         (bright(0, 0) + bright(W - 1, 0) + bright(0, H - 1) + bright(W - 1, H - 1)) / 4;
 
-      if (avgCorner < 160) {
-        // Dark background — don't attempt removal
+      if (avgCorner < 150) {
+        // Dark background — do not modify
         resolve(dataUrl);
         return;
       }
 
-      // Adaptive threshold: slightly below corner brightness so we keep
-      // light-grey diagram lines while removing the page background.
-      const THRESHOLD = Math.max(218, Math.min(248, avgCorner - 6));
+      // Adaptive threshold: remove pixels this bright or brighter.
+      // Set slightly below corner brightness to keep light-grey diagram lines.
+      // Floor at 210 so we don't accidentally keep background on very dark scans.
+      const THRESHOLD = Math.max(210, Math.min(250, avgCorner - 5));
 
-      const isBackground = (idx: number) =>
-        data[idx] >= THRESHOLD &&
-        data[idx + 1] >= THRESHOLD &&
-        data[idx + 2] >= THRESHOLD;
-
-      // ── 2. BFS flood-fill from all four edges ─────────────────────────
-      const visited = new Uint8Array(W * H);
-      const queue: number[] = [];
-
-      const enqueue = (px: number, py: number) => {
-        if (px < 0 || px >= W || py < 0 || py >= H) return;
-        const pos = py * W + px;
-        if (visited[pos]) return;
-        if (!isBackground(pos * 4)) return;
-        visited[pos] = 1;
-        queue.push(px, py);
-      };
-
-      for (let x = 0; x < W; x++) { enqueue(x, 0); enqueue(x, H - 1); }
-      for (let y = 0; y < H; y++) { enqueue(0, y); enqueue(W - 1, y); }
-
-      let head = 0;
-      while (head < queue.length) {
-        const px = queue[head++];
-        const py = queue[head++];
-        data[(py * W + px) * 4 + 3] = 0;
-        enqueue(px + 1, py);
-        enqueue(px - 1, py);
-        enqueue(px, py + 1);
-        enqueue(px, py - 1);
-      }
-
-      // ── 3. Strip any residual pure-white pixels (enclosed areas) ──────
+      // ── 2. Global threshold pass ──────────────────────────────────────
+      // Removes EVERY near-white pixel — outer background AND enclosed white
+      // areas inside component boxes — in a single O(n) pass.
       for (let i = 0; i < W * H; i++) {
         const idx = i * 4;
-        if (data[idx + 3] === 0) continue;
-        if (data[idx] > 250 && data[idx + 1] > 250 && data[idx + 2] > 250) {
-          data[idx + 3] = 0;
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        // Luminance of this pixel
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (lum >= THRESHOLD) {
+          data[idx + 3] = 0; // fully transparent
+        } else if (lum >= THRESHOLD - 20) {
+          // Soft anti-alias fringe: fade out semi-white pixels smoothly
+          data[idx + 3] = Math.round(((THRESHOLD - lum) / 20) * 255);
         }
       }
 
       ctx.putImageData(imageData, 0, 0);
 
-      // ── 4. Optional: find where diagram actually starts (skip text rows) ─
+      // ── 3. Optional: skip question-text rows above the diagram ────────
       const topRow = trimLeadingText ? findDiagramTopRow(data, W, H) : 0;
 
-      // ── 5. Auto-trim to bounding box of non-transparent content ───────
+      // ── 4. Auto-trim to tight bounding box of non-transparent content ─
       let minX = W, maxX = 0, minY = H, maxY = 0;
       for (let y = topRow; y < H; y++) {
         for (let x = 0; x < W; x++) {
-          if (data[(y * W + x) * 4 + 3] > 16) {
+          if (data[(y * W + x) * 4 + 3] > 12) {
             if (x < minX) minX = x;
             if (x > maxX) maxX = x;
             if (y < minY) minY = y;
@@ -195,11 +169,11 @@ export async function removeBackground(
       }
 
       if (maxX < minX || maxY < minY) {
-        resolve(dataUrl); // nothing visible — return original
+        resolve(dataUrl);
         return;
       }
 
-      const MARGIN = 6;
+      const MARGIN = 5;
       const cx = Math.max(0, minX - MARGIN);
       const cy = Math.max(0, minY - MARGIN);
       const cw = Math.min(W, maxX + MARGIN + 1) - cx;

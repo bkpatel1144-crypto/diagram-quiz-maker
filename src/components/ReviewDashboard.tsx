@@ -12,6 +12,25 @@ import type { Question } from "@/lib/gemini";
 import { regenerateDiagramBbox } from "@/lib/gemini";
 import { cropFromDataUrl, removeBackground } from "@/lib/pdf-utils";
 
+/**
+ * Sanitize question/option text at DISPLAY TIME.
+ * Handles old cached data that was processed before the cleanText fix.
+ * - Strips <br> / <br/> tags → space
+ * - Converts display-math \[...\] → inline \(...\) so MathJax renders inline
+ * - Collapses newlines / tabs → space
+ */
+function sanitizeDisplay(raw: string): string {
+  return raw
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/\\\[([^]*?)\\\]/g, "\\($1\\)")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[ \u00a0]{2,}/g, " ")
+    .trim();
+}
+
+/** Inline SVG data-URI checkerboard — works in every browser */
+const CHECKER_BG = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Crect width='8' height='8' fill='%23d0d0d0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23d0d0d0'/%3E%3C/svg%3E") #fff`;
+
 interface Props {
   results: PageResult[];
   apiKey: string;
@@ -184,12 +203,13 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
         {editing ? (
           <Textarea value={question.question_text} onChange={(e) => onChange({ ...question, question_text: e.target.value })} rows={4} className="font-mono text-xs" />
         ) : (
-          <div className="prose prose-sm max-w-none text-[15px] leading-relaxed text-foreground" dangerouslySetInnerHTML={{ __html: question.question_text }} />
+          <div className="prose prose-sm max-w-none text-[15px] leading-relaxed text-foreground"
+            dangerouslySetInnerHTML={{ __html: sanitizeDisplay(question.question_text) }} />
         )}
 
         {question.has_diagram && question.diagram_image && (
-          <figure className="rounded-md border p-3" style={{ background: "repeating-conic-gradient(#d4d4d4 0% 25%, #ffffff 0% 50%) 0 0 / 14px 14px" }}>
-            <img src={question.diagram_image} alt="Question diagram" className="mx-auto max-h-72 object-contain drop-shadow-sm" />
+          <figure className="rounded-md border p-3" style={{ background: CHECKER_BG }}>
+            <img src={question.diagram_image} alt="Question diagram" className="mx-auto max-h-72 object-contain" />
           </figure>
         )}
 
@@ -207,8 +227,8 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
                     {isCorrect && <span className="text-[10px] font-semibold uppercase text-primary">Correct</span>}
                   </div>
                   {img ? (
-                    <div className="w-full rounded" style={{ background: "repeating-conic-gradient(#d4d4d4 0% 25%, #ffffff 0% 50%) 0 0 / 14px 14px" }}>
-                      <img src={img} alt={`Option ${letter}`} className="max-h-40 w-full object-contain drop-shadow-sm" />
+                    <div className="w-full rounded p-1" style={{ background: CHECKER_BG }}>
+                      <img src={img} alt={`Option ${letter}`} className="max-h-44 w-full object-contain" />
                     </div>
                   ) : (
                     <div className="flex h-24 items-center justify-center text-xs text-muted-foreground">no image</div>
@@ -229,7 +249,7 @@ function QuestionEditor({ question, page, apiKey, onChange, onDelete, index }: {
                   ) : (
                     <button onClick={() => setCorrectByIndex(i)}
                       className={`flex-1 rounded px-2 py-1 text-left text-sm transition hover:bg-muted ${isCorrect ? "bg-primary/5 font-medium" : ""}`}
-                      dangerouslySetInnerHTML={{ __html: opt }} />
+                      dangerouslySetInnerHTML={{ __html: sanitizeDisplay(opt) }} />
                   )}
                 </div>
               );
