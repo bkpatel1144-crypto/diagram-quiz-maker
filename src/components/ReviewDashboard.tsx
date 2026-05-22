@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PageResult } from "./ProcessingView";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -22,6 +22,28 @@ interface Props {
 export function ReviewDashboard({ results, apiKey, onUpdate, onReset }: Props) {
   const [active, setActive] = useState(0);
   const current = results[active];
+  const rightPanelRef = useRef<HTMLDivElement>(null);
+
+  // Load MathJax once
+  useEffect(() => {
+    if ((window as any).MathJax) return;
+    (window as any).MathJax = {
+      tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]] },
+      svg: { fontCache: "global" },
+    };
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js";
+    s.async = true;
+    document.head.appendChild(s);
+  }, []);
+
+  // Re-typeset on changes
+  useEffect(() => {
+    const mj = (window as any).MathJax;
+    if (mj?.typesetPromise && rightPanelRef.current) {
+      mj.typesetPromise([rightPanelRef.current]).catch(() => {});
+    }
+  }, [results, active]);
 
   const updateQuestion = (idx: number, q: Question) => {
     const next = [...results];
